@@ -76,7 +76,6 @@ function createNoiseBuffer(
 
   for (let i = 0; i < output.length; i++) {
     const white = Math.random() * 2 - 1;
-
     if (tint === "white") {
       output[i] = white;
     } else if (tint === "pink") {
@@ -98,7 +97,13 @@ function createNoiseBuffer(
   return buffer;
 }
 
-function useAmbientSound(enabled: boolean, running: boolean, mode: SoundMode) {
+function useAmbientSound(
+  enabled: boolean,
+  running: boolean,
+  mode: SoundMode,
+  unlocked: boolean,
+  volume = 0.08
+) {
   const ctxRef = useRef<AudioContext | null>(null);
   const cleanupRef = useRef<(() => void) | null>(null);
   const noiseRef = useRef<Record<string, AudioBuffer>>({});
@@ -106,6 +111,7 @@ function useAmbientSound(enabled: boolean, running: boolean, mode: SoundMode) {
   useEffect(() => {
     return () => {
       cleanupRef.current?.();
+      cleanupRef.current = null;
       if (ctxRef.current) ctxRef.current.close().catch(() => {});
     };
   }, []);
@@ -114,7 +120,7 @@ function useAmbientSound(enabled: boolean, running: boolean, mode: SoundMode) {
     cleanupRef.current?.();
     cleanupRef.current = null;
 
-    if (!enabled || !running) return;
+    if (!enabled || !running || !unlocked) return;
 
     const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
     if (!AudioCtx) return;
@@ -166,7 +172,7 @@ function useAmbientSound(enabled: boolean, running: boolean, mode: SoundMode) {
         const now = ctx.currentTime;
         const master = ctx.createGain();
         master.gain.setValueAtTime(0.0001, now);
-        master.gain.exponentialRampToValueAtTime(0.05, now + 0.02);
+        master.gain.exponentialRampToValueAtTime(volume, now + 0.02);
         master.gain.exponentialRampToValueAtTime(0.0001, now + 4.5);
         master.connect(ctx.destination);
 
@@ -176,7 +182,7 @@ function useAmbientSound(enabled: boolean, running: boolean, mode: SoundMode) {
           osc.type = i % 2 === 0 ? "sine" : "triangle";
           osc.frequency.setValueAtTime(f, now);
           g.gain.setValueAtTime(0.0001, now);
-          g.gain.exponentialRampToValueAtTime(0.05 / (i + 1), now + 0.03);
+          g.gain.exponentialRampToValueAtTime(volume / (i + 1), now + 0.03);
           g.gain.exponentialRampToValueAtTime(0.0001, now + 4 + i * 0.2);
           osc.connect(g);
           g.connect(master);
@@ -195,8 +201,8 @@ function useAmbientSound(enabled: boolean, running: boolean, mode: SoundMode) {
         ? startBowls()
         : mode === "stream"
         ? (() => {
-            const a = loopNoise("brown", "highpass", 350, 0.045);
-            const b = loopNoise("white", "bandpass", 1400, 0.014, 0.8);
+            const a = loopNoise("brown", "highpass", 350, volume * 0.9);
+            const b = loopNoise("white", "bandpass", 1400, volume * 0.28, 0.8);
             return () => {
               a();
               b();
@@ -204,8 +210,8 @@ function useAmbientSound(enabled: boolean, running: boolean, mode: SoundMode) {
           })()
         : mode === "ocean"
         ? (() => {
-            const a = loopNoise("brown", "lowpass", 700, 0.04);
-            const b = loopNoise("pink", "bandpass", 500, 0.012, 0.6);
+            const a = loopNoise("brown", "lowpass", 700, volume * 0.8);
+            const b = loopNoise("pink", "bandpass", 500, volume * 0.22, 0.6);
             return () => {
               a();
               b();
@@ -213,21 +219,21 @@ function useAmbientSound(enabled: boolean, running: boolean, mode: SoundMode) {
           })()
         : mode === "rain"
         ? (() => {
-            const a = loopNoise("pink", "highpass", 900, 0.03);
-            const b = loopNoise("white", "bandpass", 2600, 0.008, 1.2);
+            const a = loopNoise("pink", "highpass", 900, volume * 0.6);
+            const b = loopNoise("white", "bandpass", 2600, volume * 0.12, 1.2);
             return () => {
               a();
               b();
             };
           })()
         : (() => {
-            const a = loopNoise("brown", "lowpass", 900, 0.025);
+            const a = loopNoise("brown", "lowpass", 900, volume * 0.45);
             return () => a();
           })();
 
     cleanupRef.current = cleanup;
     return () => cleanup();
-  }, [enabled, running, mode]);
+  }, [enabled, running, mode, unlocked, volume]);
 }
 
 function App() {
@@ -242,6 +248,7 @@ function App() {
   const [anchorWord, setAnchorWord] = useState(DEFAULTS.anchorWord);
   const [soundMode, setSoundMode] = useState<SoundMode>(DEFAULTS.sound);
   const [isSoundOn, setIsSoundOn] = useState(true);
+  const [audioUnlocked, setAudioUnlocked] = useState(false);
   const [isRunning, setIsRunning] = useState(false);
   const [currentRep, setCurrentRep] = useState(1);
   const [stepIndex, setStepIndex] = useState(0);
@@ -255,7 +262,25 @@ function App() {
   const [installStatus, setInstallStatus] = useState<"idle" | "installed">("idle");
   const [isMobile, setIsMobile] = useState(window.innerWidth < 768);
 
-  useAmbientSound(isSoundOn, isRunning, soundMode);
+  useAmbientSound(isSoundOn, isRunning, soundMode, audioUnlocked);
+
+  const unlockAudio = async () => {
+    try {
+      const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
+      if (!AudioCtx) return;
+      const ctx = new AudioCtx();
+      if (ctx.state === "suspended") await ctx.resume();
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      gain.gain.value = 0.0001;
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start();
+      osc.stop(ctx.currentTime + 0.01);
+      setAudioUnlocked(true);
+      setTimeout(() => ctx.close().catch(() => {}), 80);
+    } catch {}
+  };
 
   useEffect(() => {
     const onResize = () => setIsMobile(window.innerWidth < 768);
@@ -386,7 +411,8 @@ function App() {
     ? (((currentRep - 1) * totalRoutineSeconds + elapsedThisRoutine) / totalSessionSeconds) * 100
     : 0;
 
-  const start = () => {
+  const start = async () => {
+    if (!audioUnlocked) await unlockAudio();
     if (stepSecondsLeft === 0) {
       setStepIndex(0);
       setCurrentRep(1);
@@ -492,16 +518,103 @@ function App() {
     cursor: "pointer",
   };
 
+  const SettingsPanel = (
+    <div style={card}>
+      <div style={{ padding: 20 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, color: "#0f766e", fontWeight: 800 }}>
+          <SlidersHorizontal size={20} /> Event timings
+        </div>
+        <p style={{ marginTop: 8, color: "#64748b" }}>
+          Tune each part of the routine without crowding the main timer.
+        </p>
+
+        <div style={{ background: "rgba(255,255,255,0.55)", border: "1px solid #bbf7d0", borderRadius: 18, padding: 14, marginTop: 16 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexDirection: isMobile ? "column" : "row" }}>
+            <div>
+              <div style={{ color: "#0f766e", fontWeight: 700, fontSize: 14 }}>Changed a few settings?</div>
+              <div style={{ marginTop: 4, color: "#64748b", fontSize: 12 }}>Jump back to the original routine anytime.</div>
+            </div>
+            <button type="button" onClick={restoreDefaults} style={{ border: "none", borderRadius: 16, background: "#14b8a6", color: "white", padding: "12px 16px", fontWeight: 700, cursor: "pointer" }}>
+              Restore defaults
+            </button>
+          </div>
+        </div>
+
+        <div style={{ display: "grid", gap: 18, marginTop: 20 }}>
+          {[
+            ["Settle time", settle, setSettle, 5, 60, 5],
+            ["Inhale time", inhale, setInhale, 2, 10, 1],
+            ["Exhale time", exhale, setExhale, 2, 12, 1],
+            ["Breath cycles", cycles, setCycles, 1, 15, 1],
+            ["Observe time", observe, setObserve, 5, 90, 5],
+            ["Anchor word time", anchor, setAnchor, 5, 90, 5],
+            ["Ground time", ground, setGround, 5, 60, 5],
+            ["Repetitions", reps, setReps, 1, 10, 1],
+          ].map(([label, value, setter, min, max, step]) => (
+            <div key={label as string}>
+              <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 10 }}>
+                <label style={{ fontSize: 16, color: "#334155", fontWeight: 500 }}>{label as string}</label>
+                <span style={{ background: "#ccfbf1", color: "#115e59", borderRadius: 999, padding: "6px 10px", fontSize: 14, fontWeight: 700 }}>
+                  {value as number}
+                  {label === "Breath cycles" || label === "Repetitions" ? "" : "s"}
+                  {label === "Repetitions" ? "x" : ""}
+                </span>
+              </div>
+              <input type="range" min={min as number} max={max as number} step={step as number} value={value as number} onChange={(e) => (setter as React.Dispatch<React.SetStateAction<number>>)(Number(e.target.value))} style={{ width: "100%", accentColor: "#14b8a6" }} />
+            </div>
+          ))}
+
+          <div>
+            <label style={{ fontSize: 16, color: "#334155", fontWeight: 500 }}>Anchor word</label>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 8, marginTop: 10 }}>
+              {["calm", "peace", "relax"].map((word) => (
+                <button key={word} type="button" onClick={() => setAnchorWord(word)} style={{ height: 44, borderRadius: 16, cursor: "pointer", border: anchorWord === word ? "none" : "1px solid #a7f3d0", background: anchorWord === word ? "#14b8a6" : "rgba(236,253,245,0.95)", color: anchorWord === word ? "white" : "#065f46", fontWeight: 700, textTransform: "capitalize" }}>
+                  {word}
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+
+  const SoundsPanel = (
+    <div style={card}>
+      <div style={{ padding: 20 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, color: "#0f766e", fontWeight: 800 }}>
+          <Music4 size={20} /> Sounds
+        </div>
+        <p style={{ marginTop: 8, color: "#64748b" }}>
+          Choose the background sound that feels best for this session.
+        </p>
+
+        <div style={{ marginTop: 16 }}>
+          <label style={{ display: "block", fontSize: 14, color: "#334155", marginBottom: 8 }}>
+            Sound type
+          </label>
+          <select value={soundMode} onChange={(e) => setSoundMode(e.target.value as SoundMode)} style={{ width: "100%", height: 48, borderRadius: 16, border: "1px solid #a7f3d0", background: "rgba(255,255,255,0.8)", color: "#065f46", padding: "0 14px", fontSize: 16 }}>
+            {Object.entries(SOUNDS).map(([value, label]) => (
+              <option key={value} value={value}>{label}</option>
+            ))}
+          </select>
+        </div>
+
+        <div style={{ background: "rgba(255,255,255,0.55)", border: "1px solid #bbf7d0", borderRadius: 18, padding: 14, marginTop: 16, display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center" }}>
+          <div>
+            <div style={{ color: "#0f766e", fontWeight: 700, fontSize: 14 }}>Sound playback</div>
+            <div style={{ marginTop: 4, color: "#64748b", fontSize: 14 }}>
+              Background ambience starts when the routine is running.
+            </div>
+          </div>
+          <input type="checkbox" checked={isSoundOn} onChange={async (e) => { if (e.target.checked && !audioUnlocked) await unlockAudio(); setIsSoundOn(e.target.checked); }} />
+        </div>
+      </div>
+    </div>
+  );
+
   return (
-    <div
-      style={{
-        minHeight: "100vh",
-        background: "linear-gradient(135deg, #f0fdfa 0%, #ecfdf5 50%, #dcfce7 100%)",
-        color: "#334155",
-        padding: 12,
-        fontFamily: 'Inter, system-ui, -apple-system, "Segoe UI", sans-serif',
-      }}
-    >
+    <div style={{ minHeight: "100vh", background: "linear-gradient(135deg, #f0fdfa 0%, #ecfdf5 50%, #dcfce7 100%)", color: "#334155", padding: 12, fontFamily: 'Inter, system-ui, -apple-system, "Segoe UI", sans-serif' }}>
       <style>{`
         @keyframes calmPulse {
           0%, 100% { opacity: 0.78; transform: scale(1); }
@@ -510,15 +623,7 @@ function App() {
         .soft-bullet { animation: calmPulse 3.6s ease-in-out infinite; }
       `}</style>
 
-      <div
-        style={{
-          maxWidth: 1180,
-          margin: "0 auto",
-          display: "grid",
-          gap: 16,
-          gridTemplateColumns: isMobile ? "1fr" : "1.15fr 0.85fr",
-        }}
-      >
+      <div style={{ maxWidth: 1180, margin: "0 auto", display: "grid", gap: 16, gridTemplateColumns: isMobile ? "1fr" : "1.15fr 0.85fr" }}>
         <div style={{ ...card, overflow: "hidden" }}>
           <div style={{ padding: 20 }}>
             <div style={{ display: "flex", justifyContent: "space-between", gap: 12 }}>
@@ -534,19 +639,7 @@ function App() {
                 </p>
               </div>
 
-              <div
-                style={{
-                  background: "#ccfbf1",
-                  color: "#115e59",
-                  border: "1px solid #99f6e4",
-                  borderRadius: 999,
-                  padding: "10px 12px",
-                  fontWeight: 700,
-                  fontSize: 14,
-                  height: "fit-content",
-                  whiteSpace: "nowrap",
-                }}
-              >
+              <div style={{ background: "#ccfbf1", color: "#115e59", border: "1px solid #99f6e4", borderRadius: 999, padding: "10px 12px", fontWeight: 700, fontSize: 14, height: "fit-content", whiteSpace: "nowrap" }}>
                 Rep {currentRep}/{reps}
               </div>
             </div>
@@ -701,7 +794,7 @@ function App() {
                         <RotateCcw size={18} /> Reset
                       </span>
                     </button>
-                    <button onClick={() => setIsSoundOn((v) => !v)} style={secondaryBtn}>
+                    <button onClick={async () => { if (!audioUnlocked) await unlockAudio(); setIsSoundOn((v) => !v); }} style={secondaryBtn}>
                       <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
                         {isSoundOn ? <Volume2 size={18} /> : <VolumeX size={18} />}
                         {isSoundOn ? "Sound" : "Muted"}
@@ -718,12 +811,16 @@ function App() {
                     {showSettings ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
                   </button>
 
+                  {showSettings && SettingsPanel}
+
                   <button type="button" onClick={() => setShowSounds((v) => !v)} style={sectionBtn}>
                     <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
                       <Music4 size={16} /> Sounds
                     </span>
                     {showSounds ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
                   </button>
+
+                  {showSounds && SoundsPanel}
 
                   <button type="button" onClick={() => setShowSteps((v) => !v)} style={sectionBtn}>
                     <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
@@ -773,7 +870,7 @@ function App() {
                       <RotateCcw size={16} /> Reset
                     </span>
                   </button>
-                  <button onClick={() => setIsSoundOn((v) => !v)} style={secondaryBtn}>
+                  <button onClick={async () => { if (!audioUnlocked) await unlockAudio(); setIsSoundOn((v) => !v); }} style={secondaryBtn}>
                     <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
                       {isSoundOn ? <Volume2 size={16} /> : <VolumeX size={16} />}
                       {isSoundOn ? "Sound On" : "Sound Off"}
@@ -800,120 +897,28 @@ function App() {
               </>
             )}
           </div>
-
-          <div style={{ display: "grid", gap: 16 }}>
-            {(!isMobile || showSettings) && (
-              <div style={card}>
-                <div style={{ padding: 20 }}>
-                  <div style={{ display: "flex", alignItems: "center", gap: 8, color: "#0f766e", fontWeight: 800 }}>
-                    <SlidersHorizontal size={20} /> Event timings
-                  </div>
-                  <p style={{ marginTop: 8, color: "#64748b" }}>
-                    Tune each part of the routine without crowding the main timer.
-                  </p>
-
-                  <div style={{ background: "rgba(255,255,255,0.55)", border: "1px solid #bbf7d0", borderRadius: 18, padding: 14, marginTop: 16 }}>
-                    <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexDirection: isMobile ? "column" : "row" }}>
-                      <div>
-                        <div style={{ color: "#0f766e", fontWeight: 700, fontSize: 14 }}>Changed a few settings?</div>
-                        <div style={{ marginTop: 4, color: "#64748b", fontSize: 12 }}>Jump back to the original routine anytime.</div>
-                      </div>
-                      <button type="button" onClick={restoreDefaults} style={{ border: "none", borderRadius: 16, background: "#14b8a6", color: "white", padding: "12px 16px", fontWeight: 700, cursor: "pointer" }}>
-                        Restore defaults
-                      </button>
-                    </div>
-                  </div>
-
-                  <div style={{ display: "grid", gap: 18, marginTop: 20 }}>
-                    {[
-                      ["Settle time", settle, setSettle, 5, 60, 5],
-                      ["Inhale time", inhale, setInhale, 2, 10, 1],
-                      ["Exhale time", exhale, setExhale, 2, 12, 1],
-                      ["Breath cycles", cycles, setCycles, 1, 15, 1],
-                      ["Observe time", observe, setObserve, 5, 90, 5],
-                      ["Anchor word time", anchor, setAnchor, 5, 90, 5],
-                      ["Ground time", ground, setGround, 5, 60, 5],
-                      ["Repetitions", reps, setReps, 1, 10, 1],
-                    ].map(([label, value, setter, min, max, step]) => (
-                      <div key={label as string}>
-                        <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 10 }}>
-                          <label style={{ fontSize: 16, color: "#334155", fontWeight: 500 }}>{label as string}</label>
-                          <span style={{ background: "#ccfbf1", color: "#115e59", borderRadius: 999, padding: "6px 10px", fontSize: 14, fontWeight: 700 }}>
-                            {value as number}
-                            {label === "Breath cycles" || label === "Repetitions" ? "" : "s"}
-                            {label === "Repetitions" ? "x" : ""}
-                          </span>
-                        </div>
-                        <input type="range" min={min as number} max={max as number} step={step as number} value={value as number} onChange={(e) => (setter as React.Dispatch<React.SetStateAction<number>>)(Number(e.target.value))} style={{ width: "100%", accentColor: "#14b8a6" }} />
-                      </div>
-                    ))}
-
-                    <div>
-                      <label style={{ fontSize: 16, color: "#334155", fontWeight: 500 }}>Anchor word</label>
-                      <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 8, marginTop: 10 }}>
-                        {["calm", "peace", "relax"].map((word) => (
-                          <button key={word} type="button" onClick={() => setAnchorWord(word)} style={{ height: 44, borderRadius: 16, cursor: "pointer", border: anchorWord === word ? "none" : "1px solid #a7f3d0", background: anchorWord === word ? "#14b8a6" : "rgba(236,253,245,0.95)", color: anchorWord === word ? "white" : "#065f46", fontWeight: 700, textTransform: "capitalize" }}>
-                            {word}
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {(!isMobile || showSounds) && (
-              <div style={card}>
-                <div style={{ padding: 20 }}>
-                  <div style={{ display: "flex", alignItems: "center", gap: 8, color: "#0f766e", fontWeight: 800 }}>
-                    <Music4 size={20} /> Sounds
-                  </div>
-                  <p style={{ marginTop: 8, color: "#64748b" }}>
-                    Choose the background sound that feels best for this session.
-                  </p>
-
-                  <div style={{ marginTop: 16 }}>
-                    <label style={{ display: "block", fontSize: 14, color: "#334155", marginBottom: 8 }}>
-                      Sound type
-                    </label>
-                    <select value={soundMode} onChange={(e) => setSoundMode(e.target.value as SoundMode)} style={{ width: "100%", height: 48, borderRadius: 16, border: "1px solid #a7f3d0", background: "rgba(255,255,255,0.8)", color: "#065f46", padding: "0 14px", fontSize: 16 }}>
-                      {Object.entries(SOUNDS).map(([value, label]) => (
-                        <option key={value} value={value}>{label}</option>
-                      ))}
-                    </select>
-                  </div>
-
-                  <div style={{ background: "rgba(255,255,255,0.55)", border: "1px solid #bbf7d0", borderRadius: 18, padding: 14, marginTop: 16, display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center" }}>
-                    <div>
-                      <div style={{ color: "#0f766e", fontWeight: 700, fontSize: 14 }}>Sound playback</div>
-                      <div style={{ marginTop: 4, color: "#64748b", fontSize: 14 }}>
-                        Background ambience starts when the routine is running.
-                      </div>
-                    </div>
-                    <input type="checkbox" checked={isSoundOn} onChange={(e) => setIsSoundOn(e.target.checked)} />
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {!isMobile && (
-              <div style={card}>
-                <div style={{ padding: 20 }}>
-                  <div style={{ color: "#0f766e", fontWeight: 800, fontSize: 22 }}>Quick presets</div>
-                  <p style={{ marginTop: 8, color: "#64748b" }}>
-                    Pick a structure and go breathe like a professional.
-                  </p>
-                  <div style={{ display: "grid", gap: 12, marginTop: 16 }}>
-                    <button onClick={() => quickPreset(20, 4, 6, 6, 30, 30, 10, 1)} style={secondaryBtn}>Default · 4 in / 6 out</button>
-                    <button onClick={() => quickPreset(20, 4, 8, 8, 45, 45, 15, 1)} style={secondaryBtn}>Deep calm · 4 in / 8 out</button>
-                    <button onClick={() => quickPreset(15, 3, 5, 5, 20, 20, 10, 2)} style={secondaryBtn}>Quick reset · shorter rounds</button>
-                  </div>
-                </div>
-              </div>
-            )}
-          </div>
         </div>
+
+        {!isMobile && (
+          <div style={{ display: "grid", gap: 16 }}>
+            {SettingsPanel}
+            {SoundsPanel}
+
+            <div style={card}>
+              <div style={{ padding: 20 }}>
+                <div style={{ color: "#0f766e", fontWeight: 800, fontSize: 22 }}>Quick presets</div>
+                <p style={{ marginTop: 8, color: "#64748b" }}>
+                  Pick a structure and go breathe like a professional.
+                </p>
+                <div style={{ display: "grid", gap: 12, marginTop: 16 }}>
+                  <button onClick={() => quickPreset(20, 4, 6, 6, 30, 30, 10, 1)} style={secondaryBtn}>Default · 4 in / 6 out</button>
+                  <button onClick={() => quickPreset(20, 4, 8, 8, 45, 45, 15, 1)} style={secondaryBtn}>Deep calm · 4 in / 8 out</button>
+                  <button onClick={() => quickPreset(15, 3, 5, 5, 20, 20, 10, 2)} style={secondaryBtn}>Quick reset · shorter rounds</button>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );
